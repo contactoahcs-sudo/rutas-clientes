@@ -19,8 +19,12 @@ data class Parada(
     var estado: Estado = Estado.PENDIENTE,
     var marcadaEn: Long = 0L,
 ) {
+    /** false = cliente importado sin coordenadas: se ubica al llegar ("Ubicar aquí"). */
+    val ubicada get() = !lat.isNaN() && !lng.isNaN()
+
     fun toJson() = JSONObject()
-        .put("id", id).put("nombre", nombre).put("lat", lat).put("lng", lng)
+        .put("id", id).put("nombre", nombre)
+        .apply { if (ubicada) put("lat", lat).put("lng", lng) }
         .put("direccion", direccion).put("telefono", telefono).put("nota", nota)
         .put("estado", estado.name).put("marcadaEn", marcadaEn)
 
@@ -46,6 +50,7 @@ data class Ruta(
     val visitadas get() = paradas.count { it.estado == Estado.VISITADA }
     val noVisitadas get() = paradas.count { it.estado == Estado.NO_VISITADA }
     val pendientes get() = paradas.count { it.estado == Estado.PENDIENTE }
+    val sinUbicar get() = paradas.count { !it.ubicada }
 
     fun toJson() = JSONObject().put("id", id).put("nombre", nombre).put("dia", dia)
         .put("paradas", JSONArray().apply { paradas.forEach { put(it.toJson()) } })

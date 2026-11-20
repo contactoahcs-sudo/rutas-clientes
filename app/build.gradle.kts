@@ -17,8 +17,8 @@ android {
         applicationId = "com.rutasclientes.app"
         minSdk = 23
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
         manifestPlaceholders["MAPS_API_KEY"] = mapsKey
     }
 

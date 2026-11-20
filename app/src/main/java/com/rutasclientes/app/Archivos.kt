@@ -17,7 +17,7 @@ object Archivos {
         val sb = StringBuilder("﻿") // BOM para que Excel lea acentos
         sb.append("orden,nombre,direccion,lat,lng,telefono,nota,estado\n")
         ruta.paradas.forEachIndexed { i, p ->
-            sb.append(listOf((i + 1).toString(), p.nombre, p.direccion, p.lat.toString(), p.lng.toString(),
+            sb.append(listOf((i + 1).toString(), p.nombre, p.direccion, if (p.ubicada) p.lat.toString() else "", if (p.ubicada) p.lng.toString() else "",
                 p.telefono, p.nota, p.estado.name).joinToString(",") { esc(it) }).append('\n')
         }
         return sb.toString()
@@ -121,23 +121,32 @@ object Archivos {
         return out
     }
 
-    /** Convierte filas a paradas; las que no traen coordenadas se buscan por dirección (necesita internet). */
+    // Centro de Xalapa: un resultado del buscador a más de 25 km se descarta (seguro es otro lugar).
+    private const val CENTRO_LAT = 19.5438
+    private const val CENTRO_LNG = -96.9102
+
+    /**
+     * Convierte filas a paradas. Las que no traen coordenadas se buscan por dirección (necesita internet).
+     * Si no se encuentran se agregan igual "sin ubicación" para ubicarlas al llegar.
+     * @return paradas y nombres de las que quedaron sin ubicar.
+     */
     @Suppress("DEPRECATION")
     fun aParadas(ctx: Context, filas: List<Fila>, ciudad: String = "Xalapa, Veracruz"): Pair<List<Parada>, List<String>> {
         val geo = if (Geocoder.isPresent()) Geocoder(ctx, Locale("es", "MX")) else null
-        val ok = mutableListOf<Parada>()
-        val fallo = mutableListOf<String>()
+        val todas = mutableListOf<Parada>()
+        val sinUbicar = mutableListOf<String>()
         for (f in filas) {
             var lat = f.lat; var lng = f.lng
-            if (lat == null || lng == null) {
-                val q = f.direccion.ifBlank { f.nombre }
-                val r = runCatching { geo?.getFromLocationName("$q, $ciudad", 1)?.firstOrNull() }.getOrNull()
-                lat = r?.latitude; lng = r?.longitude
+            if ((lat == null || lng == null) && f.direccion.isNotBlank()) {
+                val r = runCatching { geo?.getFromLocationName("${f.direccion}, $ciudad", 1)?.firstOrNull() }.getOrNull()
+                if (r != null && Optimizador.distanciaM(r.latitude, r.longitude, CENTRO_LAT, CENTRO_LNG) < 25_000) {
+                    lat = r.latitude; lng = r.longitude
+                }
             }
-            if (lat != null && lng != null) ok.add(Parada(nombre = f.nombre, lat = lat, lng = lng,
+            if (lat == null || lng == null) sinUbicar.add(f.nombre)
+            todas.add(Parada(nombre = f.nombre, lat = lat ?: Double.NaN, lng = lng ?: Double.NaN,
                 direccion = f.direccion, telefono = f.telefono, nota = f.nota))
-            else fallo.add(f.nombre)
         }
-        return ok to fallo
+        return todas to sinUbicar
     }
 }

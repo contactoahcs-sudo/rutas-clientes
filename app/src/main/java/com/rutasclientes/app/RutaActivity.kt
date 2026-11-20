@@ -54,6 +54,7 @@ class RutaActivity : AppCompatActivity() {
     private var mapa: GoogleMap? = null
     private var miPos: LatLng? = null
     private var esperandoToque = false
+    private var ubicando: Parada? = null   // cliente que se está ubicando tocando el mapa
     private var primerEncuadre = true
     private val adaptador = Adaptador()
     private val ubic by lazy { LocationServices.getFusedLocationProviderClient(this) }
@@ -105,7 +106,12 @@ class RutaActivity : AppCompatActivity() {
             m.uiSettings.isZoomControlsEnabled = true
             m.uiSettings.isMapToolbarEnabled = false
             m.setOnMapLongClickListener { p -> nuevaParadaEn(p) }
-            m.setOnMapClickListener { p -> if (esperandoToque) { esperandoToque = false; b.ayudaMapa.visibility = View.GONE; nuevaParadaEn(p) } }
+            m.setOnMapClickListener { p ->
+                if (!esperandoToque) return@setOnMapClickListener
+                esperandoToque = false; b.ayudaMapa.visibility = View.GONE
+                val u = ubicando
+                if (u != null) { ubicando = null; fijarUbicacion(u, p) } else nuevaParadaEn(p)
+            }
             m.setOnMarkerClickListener { mk ->
                 val i = mk.tag as? Int ?: return@setOnMarkerClickListener false
                 b.lista.smoothScrollToPosition(i); false
@@ -149,14 +155,15 @@ class RutaActivity : AppCompatActivity() {
         adaptador.notifyDataSetChanged()
         val total = ruta.paradas.size
         b.conteo.text = "PARADAS ($total)   ✓ ${ruta.visitadas}   ✕ ${ruta.noVisitadas}   Faltan ${ruta.pendientes}" +
+            (if (ruta.sinUbicar > 0) "   📍 Sin ubicar ${ruta.sinUbicar}" else "") +
             if (total > 0) "   ·  ${"%.1f".format(Optimizador.longitudKm(ruta.paradas, null))} km" else ""
         val m = mapa ?: return
         m.clear()
-        if (ruta.paradas.isEmpty()) return
-        val puntos = ruta.paradas.map { LatLng(it.lat, it.lng) }
+        val puntos = ruta.paradas.filter { it.ubicada }.map { LatLng(it.lat, it.lng) }
+        if (puntos.isEmpty()) return
         m.addPolyline(PolylineOptions().addAll(puntos).color(Color.argb(150, 242, 140, 40)).width(6f))
         ruta.paradas.forEachIndexed { i, p ->
-            m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("${i + 1}. ${p.nombre}")
+            if (p.ubicada) m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("${i + 1}. ${p.nombre}")
                 .snippet(p.direccion.ifBlank { p.nota }).icon(icono(i + 1, p.estado)))?.tag = i
         }
         if (primerEncuadre) {
@@ -198,14 +205,16 @@ class RutaActivity : AppCompatActivity() {
             h.v.numero.text = (i + 1).toString()
             h.v.numero.background.mutate().setTint(color(p.estado))
             h.v.nombre.text = p.nombre
-            h.v.detalle.text = listOf(p.direccion, p.telefono, p.nota).filter { it.isNotBlank() }.joinToString(" · ")
+            h.v.detalle.text = (if (p.ubicada) "" else "📍 SIN UBICAR: toca para ubicarlo · ") +
+                listOf(p.direccion, p.telefono, p.nota).filter { it.isNotBlank() }.joinToString(" · ")
             h.v.detalle.visibility = if (h.v.detalle.text.isBlank()) View.GONE else View.VISIBLE
             h.v.root.alpha = if (p.estado == Estado.PENDIENTE) 1f else 0.6f
             h.v.si.setOnClickListener { marcar(p, Estado.VISITADA) }
             h.v.no.setOnClickListener { marcar(p, Estado.NO_VISITADA) }
             h.v.ir.setOnClickListener { navegar(p) }
             h.v.root.setOnClickListener {
-                mapa?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(p.lat, p.lng), 17f))
+                if (p.ubicada) mapa?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(p.lat, p.lng), 17f))
+                else preguntarUbicacion(p)
             }
             h.v.root.setOnLongClickListener { opcionesParada(p); true }
             h.v.numero.setOnLongClickListener { moverConNumero(h); true } // mantener el número para arrastrar
@@ -238,7 +247,29 @@ class RutaActivity : AppCompatActivity() {
     }
     private var moverConNumero: (RecyclerView.ViewHolder) -> Unit = {}
 
+    private fun preguntarUbicacion(p: Parada) {
+        AlertDialog.Builder(this).setTitle("Ubicar: ${p.nombre}")
+            .setItems(arrayOf("📍 Estoy aquí (usar mi ubicación)", "👆 Tocar el lugar en el mapa")) { _, w ->
+                if (w == 0) conUbicacionActual { pos ->
+                    if (pos == null) Toast.makeText(this, "Todavía no tengo tu ubicación. Revisa el GPS.", Toast.LENGTH_LONG).show()
+                    else fijarUbicacion(p, pos)
+                } else { ubicando = p; esperandoToque = true; b.ayudaMapa.visibility = View.VISIBLE }
+            }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun fijarUbicacion(p: Parada, pos: LatLng) {
+        p.lat = pos.latitude; p.lng = pos.longitude
+        p.nota = p.nota.replace(Regex("\\s*\\(ubicación aproximada\\)"), "").trim()
+        Almacen.guardar(this); pintar()
+        Toast.makeText(this, "${p.nombre} quedó ubicado", Toast.LENGTH_SHORT).show()
+    }
+
     private fun navegar(p: Parada) {
+        if (!p.ubicada) {
+            val q = Uri.encode("${p.nombre}, ${p.direccion.ifBlank { "Xalapa" }}")
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q"))) }
+            return
+        }
         val g = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${p.lat},${p.lng}")).setPackage("com.google.android.apps.maps")
         val geo = Intent(Intent.ACTION_VIEW, Uri.parse("geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${Uri.encode(p.nombre)})"))
         runCatching { startActivity(g) }.recoverCatching { startActivity(geo) }
@@ -251,12 +282,13 @@ class RutaActivity : AppCompatActivity() {
         conUbicacionActual { pos ->
             val inicio = pos?.let { it.latitude to it.longitude }
             val hechas = ruta.paradas.filter { it.estado != Estado.PENDIENTE }
-            val pendientes = ruta.paradas.filter { it.estado == Estado.PENDIENTE }
+            val pendientes = ruta.paradas.filter { it.estado == Estado.PENDIENTE && it.ubicada }
+            val sinUbicar = ruta.paradas.filter { it.estado == Estado.PENDIENTE && !it.ubicada }
             val antesKm = Optimizador.longitudKm(pendientes, inicio)
             val nuevas = Optimizador.optimizar(pendientes, inicio)
             val despuesKm = Optimizador.longitudKm(nuevas, inicio)
             val respaldo = ruta.paradas.toList()
-            ruta.paradas.clear(); ruta.paradas.addAll(hechas + nuevas)
+            ruta.paradas.clear(); ruta.paradas.addAll(hechas + nuevas + sinUbicar)
             Almacen.guardar(this); pintar()
             val desde = if (inicio != null) "desde donde estás" else "sin tu ubicación"
             Snackbar.make(b.root, "Ruta optimizada $desde: ${"%.1f".format(antesKm)} → ${"%.1f".format(despuesKm)} km (línea recta)", Snackbar.LENGTH_LONG)
@@ -332,11 +364,11 @@ class RutaActivity : AppCompatActivity() {
 
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
-        val ops = arrayOf("Editar datos", "Mover a mi ubicación actual", "Cambiar número (orden)", "Llamar", "Eliminar")
+        val ops = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar")
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
                 0 -> dialogoParada(p, false)
-                1 -> conUbicacionActual { pos -> pos?.let { p.lat = it.latitude; p.lng = it.longitude; Almacen.guardar(this); pintar() } }
+                1 -> preguntarUbicacion(p)
                 2 -> cambiarNumero(p)
                 3 -> if (p.telefono.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${p.telefono}")))
                      else Toast.makeText(this, "Este cliente no tiene teléfono", Toast.LENGTH_SHORT).show()
@@ -403,14 +435,15 @@ class RutaActivity : AppCompatActivity() {
     }
 
     private fun procesarImport(filas: List<Archivos.Fila>, reemplazar: Boolean) {
-        val sinCoord = filas.count { it.lat == null }
+        val sinCoord = filas.count { it.lat == null && it.direccion.isNotBlank() }
         if (sinCoord > 0) Toast.makeText(this, "Buscando $sinCoord direcciones en el mapa…", Toast.LENGTH_LONG).show()
         lifecycleScope.launch {
-            val (ok, fallo) = withContext(Dispatchers.IO) { Archivos.aParadas(this@RutaActivity, filas) }
+            val (todas, sinUbicar) = withContext(Dispatchers.IO) { Archivos.aParadas(this@RutaActivity, filas) }
             if (reemplazar) ruta.paradas.clear()
-            ruta.paradas.addAll(ok); primerEncuadre = true
+            ruta.paradas.addAll(todas); primerEncuadre = true
             Almacen.guardar(this@RutaActivity); pintar()
-            val msg = "Se agregaron ${ok.size} clientes." + if (fallo.isNotEmpty()) "\n\nNo encontré en el mapa (agrégalos tocando el mapa):\n• " + fallo.joinToString("\n• ") else ""
+            val msg = "Se agregaron ${todas.size} clientes." + if (sinUbicar.isNotEmpty())
+                "\n\n${sinUbicar.size} quedaron SIN UBICAR. Cuando llegues a cada uno toca su nombre → \"Estoy aquí\" y queda guardado con tu GPS exacto:\n• " + sinUbicar.joinToString("\n• ") else ""
             AlertDialog.Builder(this@RutaActivity).setTitle("Importación").setMessage(msg).setPositiveButton("OK", null).show()
         }
     }

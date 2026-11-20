@@ -65,7 +65,7 @@ object Optimizador {
     fun longitudKm(paradas: List<Parada>, inicio: Pair<Double, Double>?): Double {
         var total = 0.0
         var prev = inicio
-        for (p in paradas) {
+        for (p in paradas.filter { it.ubicada }) {
             prev?.let { total += distanciaM(it.first, it.second, p.lat, p.lng) }
             prev = p.lat to p.lng
         }
