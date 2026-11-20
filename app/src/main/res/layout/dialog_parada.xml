@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:paddingHorizontal="24dp" android:paddingTop="8dp">
+    <EditText android:id="@+id/nombre" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:hint="Nombre del cliente (ej. Super x24 Cristal)" android:inputType="textCapWords" />
+    <EditText android:id="@+id/direccion" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:hint="Dirección (opcional)" android:inputType="textPostalAddress" />
+    <EditText android:id="@+id/telefono" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:hint="Teléfono (opcional)" android:inputType="phone" />
+    <EditText android:id="@+id/nota" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:hint="Nota (encargado, horario, pedido…)" android:inputType="textMultiLine|textCapSentences" />
+</LinearLayout>
