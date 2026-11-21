@@ -18,6 +18,7 @@ data class Parada(
     var nota: String = "",
     var estado: Estado = Estado.PENDIENTE,
     var marcadaEn: Long = 0L,
+    var visitas: Int = 0,               // prospectos: cuántas veces se le ha visitado
 ) {
     /** false = cliente importado sin coordenadas: se ubica al llegar ("Ubicar aquí"). */
     val ubicada get() = !lat.isNaN() && !lng.isNaN()
@@ -26,7 +27,7 @@ data class Parada(
         .put("id", id).put("nombre", nombre)
         .apply { if (ubicada) put("lat", lat).put("lng", lng) }
         .put("direccion", direccion).put("telefono", telefono).put("nota", nota)
-        .put("estado", estado.name).put("marcadaEn", marcadaEn)
+        .put("estado", estado.name).put("marcadaEn", marcadaEn).put("visitas", visitas)
 
     companion object {
         fun fromJson(o: JSONObject) = Parada(
@@ -37,6 +38,7 @@ data class Parada(
             nota = o.optString("nota"),
             estado = runCatching { Estado.valueOf(o.optString("estado")) }.getOrDefault(Estado.PENDIENTE),
             marcadaEn = o.optLong("marcadaEn"),
+            visitas = o.optInt("visitas"),
         )
     }
 }
@@ -70,6 +72,22 @@ data class Ruta(
 /** Guarda todas las rutas en un archivo JSON dentro del teléfono (sin internet). */
 object Almacen {
     private const val ARCHIVO = "rutas.json"
+    /** Lista especial: tiendas por convencer. No es una ruta del día. */
+    const val PROSPECTOS = "__prospectos__"
+
+    fun prospectos(ctx: Context): Ruta = ruta(ctx, PROSPECTOS)
+        ?: Ruta(id = PROSPECTOS, nombre = "Prospectos", dia = 0).also { rutas(ctx).add(it); guardar(ctx) }
+
+    /** Rutas de verdad (sin la lista de prospectos). */
+    fun rutasDelDia(ctx: Context) = rutas(ctx).filter { it.id != PROSPECTOS }
+
+    /** Pasa un prospecto a una ruta como cliente (al final). */
+    fun hacerCliente(ctx: Context, p: Parada, destino: Ruta) {
+        prospectos(ctx).paradas.remove(p)
+        p.estado = Estado.PENDIENTE; p.marcadaEn = 0
+        destino.paradas.add(p)
+        guardar(ctx)
+    }
     private var cache: MutableList<Ruta>? = null
 
     private fun file(ctx: Context) = File(ctx.filesDir, ARCHIVO)
@@ -97,9 +115,43 @@ object Almacen {
     /** Respaldo completo (todas las rutas) como texto JSON. */
     fun respaldo(ctx: Context): String = JSONArray().apply { rutas(ctx).forEach { put(it.toJson()) } }.toString(2)
 
+    // ---------- Compartir rutas entre teléfonos con Mis Rutas ----------
+    /** Archivo que se manda por WhatsApp/Drive; Mis Rutas lo reconoce por "app":"MisRutas". */
+    fun paquete(r: Ruta): String = JSONObject().put("app", "MisRutas").put("formato", 1)
+        .put("rutas", JSONArray().put(r.toJson())).toString(2)
+
+    /** Lee un paquete compartido o un respaldo. Lanza error si no es de Mis Rutas. */
+    fun leerPaquete(texto: String): List<Ruta> {
+        val t = texto.trim().removePrefix("\uFEFF")
+        val arr = if (t.startsWith("[")) JSONArray(t) else {
+            val o = JSONObject(t)
+            require(o.optString("app") == "MisRutas") { "No es un archivo de Mis Rutas" }
+            o.getJSONArray("rutas")
+        }
+        return (0 until arr.length()).map { Ruta.fromJson(arr.getJSONObject(it)) }
+    }
+
+    /**
+     * Guarda una ruta recibida de otro teléfono. Las marcas ✓ ✕ se limpian.
+     * @param comoCopia true = si ya existe, se guarda aparte en lugar de reemplazarla.
+     */
+    fun recibir(ctx: Context, r: Ruta, comoCopia: Boolean): Ruta {
+        r.paradas.forEach { it.estado = Estado.PENDIENTE; it.marcadaEn = 0 }
+        val lista = rutas(ctx)
+        if (r.id == PROSPECTOS) {           // prospectos: se suman los que falten
+            val mios = prospectos(ctx)
+            r.paradas.filter { n -> mios.paradas.none { it.id == n.id } }.forEach { mios.paradas.add(it) }
+            guardar(ctx); return mios
+        }
+        val final = if (comoCopia && lista.any { it.id == r.id })
+            Ruta(nombre = r.nombre + " (recibida)", dia = r.dia, paradas = r.paradas) else r
+        lista.removeAll { it.id == final.id }
+        lista.add(final); guardar(ctx)
+        return final
+    }
+
     fun restaurar(ctx: Context, texto: String): Int {
-        val arr = JSONArray(texto)
-        val nuevas = (0 until arr.length()).map { Ruta.fromJson(arr.getJSONObject(it)) }
+        val nuevas = leerPaquete(texto)
         val lista = rutas(ctx)
         nuevas.forEach { n -> lista.removeAll { it.id == n.id }; lista.add(n) }
         guardar(ctx)

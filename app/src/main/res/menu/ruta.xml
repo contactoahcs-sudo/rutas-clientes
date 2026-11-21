@@ -1,5 +1,6 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@+id/nuevoDia" android:title="Nuevo día (borrar marcas ✓ ✕)" />
+    <item android:id="@+id/compartir" android:title="Compartir ruta (WhatsApp…) con otro Mis Rutas" />
     <item android:id="@+id/importar" android:title="Importar paradas (CSV / Excel CSV / KML / GPX)" />
     <item android:id="@+id/exportar" android:title="Exportar a Excel (CSV)" />
     <item android:id="@+id/renombrar" android:title="Cambiar nombre o día" />

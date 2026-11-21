@@ -54,7 +54,9 @@ class RutaActivity : AppCompatActivity() {
     private var mapa: GoogleMap? = null
     private var miPos: LatLng? = null
     private var esperandoToque = false
-    private var ubicando: Parada? = null   // cliente que se está ubicando tocando el mapa
+    private var ubicando: Parada? = null
+    private val esProspectos get() = ruta.id == Almacen.PROSPECTOS
+    private val MORADO = Color.parseColor("#8E24AA")   // cliente que se está ubicando tocando el mapa
     private var primerEncuadre = true
     private val adaptador = Adaptador()
     private val ubic by lazy { LocationServices.getFusedLocationProviderClient(this) }
@@ -113,8 +115,11 @@ class RutaActivity : AppCompatActivity() {
                 if (u != null) { ubicando = null; fijarUbicacion(u, p) } else nuevaParadaEn(p)
             }
             m.setOnMarkerClickListener { mk ->
-                val i = mk.tag as? Int ?: return@setOnMarkerClickListener false
-                b.lista.smoothScrollToPosition(i); false
+                when (val t = mk.tag) {
+                    is Int -> { b.lista.smoothScrollToPosition(t); false }
+                    is Parada -> { mk.showInfoWindow(); opcionesProspecto(t); true }
+                    else -> false
+                }
             }
             m.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(19.5438, -96.9102), 13f)) // Xalapa
             if (tienePermiso()) activarUbicacion()
@@ -128,6 +133,7 @@ class RutaActivity : AppCompatActivity() {
     override fun onResume() { super.onResume(); if (tienePermiso() && mapa != null) activarUbicacion() }
 
     private fun titulo() {
+        if (esProspectos) { b.toolbar.title = "★ Prospectos por convencer"; return }
         b.toolbar.title = ruta.nombre + if (ruta.dia > 0) " / ${Ruta.DIAS[ruta.dia]}" else ""
     }
 
@@ -154,17 +160,24 @@ class RutaActivity : AppCompatActivity() {
     private fun pintar() {
         adaptador.notifyDataSetChanged()
         val total = ruta.paradas.size
+        if (esProspectos) b.conteo.text = "★ PROSPECTOS ($total)   ✓ = \"pasé hoy\"   ·   Mantén presionado → Ya es cliente" else
         b.conteo.text = "PARADAS ($total)   ✓ ${ruta.visitadas}   ✕ ${ruta.noVisitadas}   Faltan ${ruta.pendientes}" +
             (if (ruta.sinUbicar > 0) "   📍 Sin ubicar ${ruta.sinUbicar}" else "") +
             if (total > 0) "   ·  ${"%.1f".format(Optimizador.longitudKm(ruta.paradas, null))} km" else ""
         val m = mapa ?: return
         m.clear()
+        // Prospectos (tiendas por convencer) en morado en el mapa de cada ruta
+        if (!esProspectos) Almacen.prospectos(this).paradas.filter { it.ubicada }.forEach { p ->
+            m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("★ ${p.nombre} (prospecto)")
+                .snippet("Visitas: ${p.visitas}" + if (p.nota.isNotBlank()) " · ${p.nota}" else "")
+                .icon(icono(0, Estado.PENDIENTE, prospecto = true)))?.tag = p
+        }
         val puntos = ruta.paradas.filter { it.ubicada }.map { LatLng(it.lat, it.lng) }
         if (puntos.isEmpty()) return
-        m.addPolyline(PolylineOptions().addAll(puntos).color(Color.argb(150, 242, 140, 40)).width(6f))
+        if (!esProspectos) m.addPolyline(PolylineOptions().addAll(puntos).color(Color.argb(150, 242, 140, 40)).width(6f))
         ruta.paradas.forEachIndexed { i, p ->
             if (p.ubicada) m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("${i + 1}. ${p.nombre}")
-                .snippet(p.direccion.ifBlank { p.nota }).icon(icono(i + 1, p.estado)))?.tag = i
+                .snippet(p.direccion.ifBlank { p.nota }).icon(icono(i + 1, p.estado, esProspectos)))?.tag = i
         }
         if (primerEncuadre) {
             primerEncuadre = false
@@ -183,16 +196,16 @@ class RutaActivity : AppCompatActivity() {
         Estado.NO_VISITADA -> Color.parseColor("#E53935")
     }
 
-    private fun icono(n: Int, e: Estado): BitmapDescriptor {
+    private fun icono(n: Int, e: Estado, prospecto: Boolean = false): BitmapDescriptor {
         val d = resources.displayMetrics.density
         val s = (34 * d).toInt()
         val bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         p.color = Color.WHITE; c.drawCircle(s / 2f, s / 2f, s / 2f, p)
-        p.color = color(e); c.drawCircle(s / 2f, s / 2f, s / 2f - 2 * d, p)
+        p.color = if (prospecto) MORADO else color(e); c.drawCircle(s / 2f, s / 2f, s / 2f - 2 * d, p)
         p.color = Color.WHITE; p.textSize = (if (n > 99) 11 else 14) * d; p.textAlign = Paint.Align.CENTER; p.isFakeBoldText = true
-        c.drawText(n.toString(), s / 2f, s / 2f - (p.descent() + p.ascent()) / 2, p)
+        c.drawText(if (prospecto && n == 0) "★" else n.toString(), s / 2f, s / 2f - (p.descent() + p.ascent()) / 2, p)
         return BitmapDescriptorFactory.fromBitmap(bmp)
     }
 
@@ -203,13 +216,15 @@ class RutaActivity : AppCompatActivity() {
         override fun onBindViewHolder(h: VH, i: Int) {
             val p = ruta.paradas[i]
             h.v.numero.text = (i + 1).toString()
-            h.v.numero.background.mutate().setTint(color(p.estado))
+            h.v.numero.background.mutate().setTint(if (esProspectos) MORADO else color(p.estado))
+            h.v.no.visibility = if (esProspectos) View.GONE else View.VISIBLE
             h.v.nombre.text = p.nombre
             h.v.detalle.text = (if (p.ubicada) "" else "📍 SIN UBICAR: toca para ubicarlo · ") +
+                (if (esProspectos) "Visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") + " · " else "") +
                 listOf(p.direccion, p.telefono, p.nota).filter { it.isNotBlank() }.joinToString(" · ")
             h.v.detalle.visibility = if (h.v.detalle.text.isBlank()) View.GONE else View.VISIBLE
-            h.v.root.alpha = if (p.estado == Estado.PENDIENTE) 1f else 0.6f
-            h.v.si.setOnClickListener { marcar(p, Estado.VISITADA) }
+            h.v.root.alpha = if (p.estado == Estado.PENDIENTE || esProspectos) 1f else 0.6f
+            h.v.si.setOnClickListener { if (esProspectos) paseHoy(p) else marcar(p, Estado.VISITADA) }
             h.v.no.setOnClickListener { marcar(p, Estado.NO_VISITADA) }
             h.v.ir.setOnClickListener { navegar(p) }
             h.v.root.setOnClickListener {
@@ -219,6 +234,41 @@ class RutaActivity : AppCompatActivity() {
             h.v.root.setOnLongClickListener { opcionesParada(p); true }
             h.v.numero.setOnLongClickListener { moverConNumero(h); true } // mantener el número para arrastrar
         }
+    }
+
+    private fun fecha(t: Long) = java.text.SimpleDateFormat("d MMM", Locale("es", "MX")).format(java.util.Date(t))
+
+    /** Prospecto: registra una visita de seguimiento. */
+    private fun paseHoy(p: Parada) {
+        p.visitas++; p.marcadaEn = System.currentTimeMillis()
+        Almacen.guardar(this); pintar()
+        Snackbar.make(b.root, "${p.nombre}: visita #${p.visitas} registrada", Snackbar.LENGTH_LONG)
+            .setAction("Ya es cliente") { elegirRutaPara(p) }.show()
+    }
+
+    /** Opciones de un prospecto tocado en el mapa de una ruta. */
+    private fun opcionesProspecto(p: Parada) {
+        AlertDialog.Builder(this).setTitle("★ ${p.nombre}")
+            .setMessage("Prospecto · visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") +
+                (if (p.nota.isNotBlank()) "\n${p.nota}" else ""))
+            .setPositiveButton("Pasé hoy") { _, _ -> paseHoy(p) }
+            .setNeutralButton("Ya es cliente") { _, _ ->
+                Almacen.hacerCliente(this, p, ruta); pintar()
+                Toast.makeText(this, "${p.nombre} ahora es cliente #${ruta.paradas.size} de esta ruta", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Ir ➤") { _, _ -> navegar(p) }
+            .show()
+    }
+
+    /** Desde la lista de prospectos: elegir a qué ruta pasa como cliente. */
+    private fun elegirRutaPara(p: Parada) {
+        val rutas = Almacen.rutasDelDia(this)
+        if (rutas.isEmpty()) { Toast.makeText(this, "Primero crea una ruta", Toast.LENGTH_SHORT).show(); return }
+        val nombres = rutas.map { it.nombre + if (it.dia > 0) " / ${Ruta.DIAS[it.dia]}" else "" }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("¿A qué ruta pasa ${p.nombre}?").setItems(nombres) { _, w ->
+            Almacen.hacerCliente(this, p, rutas[w]); pintar()
+            Toast.makeText(this, "¡${p.nombre} ya es cliente de la ruta ${rutas[w].nombre}!", Toast.LENGTH_LONG).show()
+        }.show()
     }
 
     private fun marcar(p: Parada, e: Estado) {
@@ -350,23 +400,37 @@ class RutaActivity : AppCompatActivity() {
         val dir = v.findViewById<EditText>(R.id.direccion).apply { setText(dirSugerida) }
         val tel = v.findViewById<EditText>(R.id.telefono).apply { setText(p.telefono) }
         val nota = v.findViewById<EditText>(R.id.nota).apply { setText(p.nota) }
-        AlertDialog.Builder(this).setTitle(if (esNueva) "Cliente #${ruta.paradas.size + 1}" else "Editar cliente")
+        val tipo = v.findViewById<android.widget.RadioGroup>(R.id.tipo)
+        val rCliente = v.findViewById<android.widget.RadioButton>(R.id.tipoCliente)
+        if (esNueva && !esProspectos) rCliente.text = "Cliente de esta ruta (#${ruta.paradas.size + 1})"
+        tipo.check(if (esProspectos) R.id.tipoProspecto else R.id.tipoCliente)
+        if (!esNueva || esProspectos) tipo.visibility = View.GONE
+        AlertDialog.Builder(this).setTitle(if (esNueva) (if (esProspectos) "Nuevo prospecto" else "Agregar punto") else "Editar")
             .setView(v)
             .setPositiveButton("Guardar") { _, _ ->
-                p.nombre = nom.text.toString().trim().ifBlank { "Cliente ${ruta.paradas.size + 1}" }
+                val comoProspecto = tipo.checkedRadioButtonId == R.id.tipoProspecto
+                val destino = if (comoProspecto) Almacen.prospectos(this) else ruta
+                p.nombre = nom.text.toString().trim().ifBlank { (if (comoProspecto) "Prospecto " else "Cliente ") + (destino.paradas.size + 1) }
                 p.direccion = dir.text.toString().trim(); p.telefono = tel.text.toString().trim(); p.nota = nota.text.toString().trim()
-                if (esNueva) ruta.paradas.add(p)
+                if (esNueva) destino.paradas.add(p)
                 Almacen.guardar(this); pintar()
-                if (esNueva) b.lista.smoothScrollToPosition(ruta.paradas.size - 1)
+                if (esNueva && destino === ruta) b.lista.smoothScrollToPosition(ruta.paradas.size - 1)
+                if (esNueva && comoProspecto && !esProspectos)
+                    Toast.makeText(this, "★ ${p.nombre} guardado como prospecto (morado en el mapa)", Toast.LENGTH_LONG).show()
             }
             .setNegativeButton("Cancelar", null).show()
     }
 
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
-        val ops = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar")
+        val base = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar")
+        val ops = if (esProspectos) base + "✅ Ya es cliente → pasar a una ruta" else base + "★ Regresar a prospecto"
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
+                5 -> if (esProspectos) elegirRutaPara(p) else {
+                    ruta.paradas.remove(p); p.estado = Estado.PENDIENTE; Almacen.prospectos(this).paradas.add(p)
+                    Almacen.guardar(this); pintar()
+                }
                 0 -> dialogoParada(p, false)
                 1 -> preguntarUbicacion(p)
                 2 -> cambiarNumero(p)
@@ -399,6 +463,7 @@ class RutaActivity : AppCompatActivity() {
                 .setPositiveButton("Sí") { _, _ ->
                     ruta.paradas.forEach { it.estado = Estado.PENDIENTE; it.marcadaEn = 0 }; Almacen.guardar(this); pintar()
                 }.setNegativeButton("Cancelar", null).show()
+            R.id.compartir -> compartir()
             R.id.importar -> importar.launch(arrayOf("text/*", "application/*", "*/*"))
             R.id.exportar -> exportar.launch("ruta-${ruta.nombre}-${Ruta.DIAS[ruta.dia]}.csv".replace(Regex("[^\\w.\\-]+"), "_"))
             R.id.renombrar -> {
@@ -416,6 +481,21 @@ class RutaActivity : AppCompatActivity() {
                 .setPositiveButton("Eliminar") { _, _ -> Almacen.rutas(this).remove(ruta); Almacen.guardar(this); finish() }
                 .setNegativeButton("Cancelar", null).show()
         }
+    }
+
+    /** Manda la ruta como archivo que Mis Rutas abre en otro teléfono. */
+    private fun compartir() {
+        val dir = java.io.File(cacheDir, "compartir").apply { mkdirs() }
+        val nombre = (if (esProspectos) "prospectos" else "ruta-${ruta.nombre}-${Ruta.DIAS[ruta.dia]}")
+            .replace(Regex("[^\\w\\-]+"), "_") + ".misrutas.json"
+        val f = java.io.File(dir, nombre).apply { writeText(Almacen.paquete(ruta)) }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+        val texto = "Ruta ${b.toolbar.title} (${ruta.paradas.size} clientes). Ábrela con la app Mis Rutas."
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_STREAM, uri); putExtra(Intent.EXTRA_TEXT, texto)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }, "Compartir ruta"))
     }
 
     private fun importarDe(uri: Uri) {

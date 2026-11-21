@@ -2,6 +2,13 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="wrap_content"
     android:orientation="vertical" android:paddingHorizontal="24dp" android:paddingTop="8dp">
+    <RadioGroup android:id="@+id/tipo" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp" android:orientation="vertical">
+        <RadioButton android:id="@+id/tipoCliente" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Cliente de esta ruta" />
+        <RadioButton android:id="@+id/tipoProspecto" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="★ Prospecto: tienda por convencer (no entra a la ruta)" />
+    </RadioGroup>
     <EditText android:id="@+id/nombre" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:hint="Nombre del cliente (ej. Super x24 Cristal)" android:inputType="textCapWords" />
     <EditText android:id="@+id/direccion" android:layout_width="match_parent" android:layout_height="wrap_content"

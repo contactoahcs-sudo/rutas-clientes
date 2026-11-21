@@ -63,6 +63,46 @@ class MainActivity : AppCompatActivity() {
         b.lista.layoutManager = LinearLayoutManager(this)
         b.nueva.setOnClickListener { dialogoRuta(null) }
         buscarActualizacion(false)
+        manejarArchivoRecibido(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); manejarArchivoRecibido(intent)
+    }
+
+    /** Abre una ruta que mandaron desde otro teléfono con Mis Rutas (WhatsApp, Drive, correo…). */
+    @Suppress("DEPRECATION")
+    private fun manejarArchivoRecibido(intentRecibido: Intent?) {
+        val i = intentRecibido ?: return
+        val uri: Uri = when (i.action) {
+            Intent.ACTION_VIEW -> i.data
+            Intent.ACTION_SEND -> i.getParcelableExtra(Intent.EXTRA_STREAM)
+            else -> null
+        } ?: return
+        i.action = null   // no volver a importarlo al girar la pantalla
+        val rutas = runCatching {
+            Almacen.leerPaquete(contentResolver.openInputStream(uri)!!.bufferedReader().readText())
+        }.getOrElse {
+            Toast.makeText(this, "Ese archivo no es una ruta de Mis Rutas", Toast.LENGTH_LONG).show(); return
+        }
+        rutas.forEach { r -> preguntarRecibir(r) }
+    }
+
+    private fun preguntarRecibir(r: Ruta) {
+        val nombre = if (r.id == Almacen.PROSPECTOS) "★ Prospectos" else r.nombre + if (r.dia > 0) " / ${Ruta.DIAS[r.dia]}" else ""
+        val yaExiste = Almacen.ruta(this, r.id) != null && r.id != Almacen.PROSPECTOS
+        val d = AlertDialog.Builder(this).setTitle("Ruta recibida")
+            .setMessage("$nombre\n${r.paradas.size} clientes." + if (yaExiste) "\n\nYa tienes esta ruta. ¿Reemplazarla o guardar una copia?" else "")
+            .setPositiveButton(if (yaExiste) "Reemplazar" else "Guardar") { _, _ -> guardarRecibida(r, false) }
+            .setNegativeButton("Cancelar", null)
+        if (yaExiste) d.setNeutralButton("Copia") { _, _ -> guardarRecibida(r, true) }
+        d.show()
+    }
+
+    private fun guardarRecibida(r: Ruta, copia: Boolean) {
+        val g = Almacen.recibir(this, r, copia)
+        refrescar()
+        startActivity(Intent(this, RutaActivity::class.java).putExtra("id", g.id))
     }
 
     override fun onResume() { super.onResume(); refrescar() }
@@ -72,11 +112,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun refrescar() {
         val hoy = diaHoy()
-        val rutas = Almacen.rutas(this).sortedWith(compareBy({ if (it.dia == hoy) 0 else 1 }, { if (it.dia == 0) 9 else it.dia }, { it.nombre }))
+        val prosp = Almacen.prospectos(this)
+        val rutas = listOf(prosp) + Almacen.rutasDelDia(this).sortedWith(compareBy({ if (it.dia == hoy) 0 else 1 }, { if (it.dia == 0) 9 else it.dia }, { it.nombre }))
         val deHoy = rutas.firstOrNull { it.dia == hoy }
         b.hoy.text = if (deHoy != null) "Hoy es ${Ruta.DIAS[hoy]}: te toca la ruta ${deHoy.nombre} (${deHoy.paradas.size} clientes)"
         else "Hoy es ${Ruta.DIAS[hoy]}"
-        b.vacio.visibility = if (rutas.isEmpty()) View.VISIBLE else View.GONE
+        b.vacio.visibility = if (rutas.size <= 1) View.VISIBLE else View.GONE
         b.lista.adapter = Adaptador(rutas, hoy)
     }
 
@@ -86,13 +127,22 @@ class MainActivity : AppCompatActivity() {
         override fun getItemCount() = rutas.size
         override fun onBindViewHolder(h: VH, i: Int) {
             val r = rutas[i]
+            h.v.root.setOnClickListener {
+                startActivity(Intent(this@MainActivity, RutaActivity::class.java).putExtra("id", r.id))
+            }
+            if (r.id == Almacen.PROSPECTOS) {
+                h.v.nombre.text = "★ Prospectos por convencer"
+                h.v.detalle.text = if (r.paradas.isEmpty()) "Tiendas que aún no son clientes. Agrégalas desde el mapa con +"
+                    else "${r.paradas.size} tiendas · ${r.paradas.sumOf { it.visitas }} visitas de seguimiento"
+                h.v.avance.visibility = View.GONE
+                h.v.root.setOnLongClickListener(null)
+                return
+            }
+            h.v.avance.visibility = View.VISIBLE
             h.v.nombre.text = (if (r.dia == hoy) "⭐ " else "") + r.nombre + if (r.dia > 0) " / ${Ruta.DIAS[r.dia]}" else ""
             h.v.detalle.text = "${r.paradas.size} clientes · ✓ ${r.visitadas} · ✕ ${r.noVisitadas} · faltan ${r.pendientes}"
             h.v.avance.max = maxOf(1, r.paradas.size)
             h.v.avance.progress = r.visitadas + r.noVisitadas
-            h.v.root.setOnClickListener {
-                startActivity(Intent(this@MainActivity, RutaActivity::class.java).putExtra("id", r.id))
-            }
             h.v.root.setOnLongClickListener { dialogoRuta(r); true }
         }
     }
