@@ -583,7 +583,7 @@ class RutaActivity : AppCompatActivity() {
         val dir = java.io.File(cacheDir, "compartir").apply { mkdirs() }
         val nombre = (if (esProspectos) "prospectos" else "ruta-${ruta.nombre}-${Ruta.DIAS[ruta.dia]}")
             .replace(Regex("[^\\w\\-]+"), "_") + ".misrutas.json"
-        val f = java.io.File(dir, nombre).apply { writeText(Almacen.paquete(this, ruta)) }
+        val f = java.io.File(dir, nombre).apply { writeText(Almacen.paquete(this@RutaActivity, ruta)) }
         val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
         val texto = "Ruta ${b.toolbar.title} (${ruta.paradas.size} clientes). Ábrela con la app Mis Rutas."
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
