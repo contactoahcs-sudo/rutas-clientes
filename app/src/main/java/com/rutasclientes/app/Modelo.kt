@@ -20,6 +20,7 @@ data class Parada(
     var marcadaEn: Long = 0L,
     var visitas: Int = 0,               // prospectos: cuántas veces se le ha visitado
     val etiquetas: MutableList<String> = mutableListOf(),   // ids de Etiqueta
+    val historial: MutableList<Visita> = mutableListOf(),   // registro de visitas (cambios / comentarios)
 ) {
     /** false = cliente importado sin coordenadas: se ubica al llegar ("Ubicar aquí"). */
     val ubicada get() = !lat.isNaN() && !lng.isNaN()
@@ -30,6 +31,7 @@ data class Parada(
         .put("direccion", direccion).put("telefono", telefono).put("nota", nota)
         .put("estado", estado.name).put("marcadaEn", marcadaEn).put("visitas", visitas)
         .put("etiquetas", JSONArray(etiquetas))
+        .put("historial", JSONArray().apply { historial.forEach { put(it.toJson()) } })
 
     companion object {
         fun fromJson(o: JSONObject) = Parada(
@@ -42,6 +44,7 @@ data class Parada(
             marcadaEn = o.optLong("marcadaEn"),
             visitas = o.optInt("visitas"),
             etiquetas = o.optJSONArray("etiquetas")?.let { a -> (0 until a.length()).map { a.getString(it) }.toMutableList() } ?: mutableListOf(),
+            historial = o.optJSONArray("historial")?.let { a -> (0 until a.length()).map { Visita.fromJson(a.getJSONObject(it)) }.toMutableList() } ?: mutableListOf(),
         )
     }
 }

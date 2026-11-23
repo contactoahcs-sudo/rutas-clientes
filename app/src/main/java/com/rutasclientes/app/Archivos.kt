@@ -15,10 +15,10 @@ object Archivos {
     // ---------- Exportar ----------
     fun csv(ruta: Ruta): String {
         val sb = StringBuilder("﻿") // BOM para que Excel lea acentos
-        sb.append("orden,nombre,direccion,lat,lng,telefono,nota,estado\n")
+        sb.append("orden,nombre,direccion,lat,lng,telefono,nota,estado,ultima_visita\n")
         ruta.paradas.forEachIndexed { i, p ->
             sb.append(listOf((i + 1).toString(), p.nombre, p.direccion, if (p.ubicada) p.lat.toString() else "", if (p.ubicada) p.lng.toString() else "",
-                p.telefono, p.nota, p.estado.name).joinToString(",") { esc(it) }).append('\n')
+                p.telefono, p.nota, p.estado.name, Visitas.ultima(p)?.resumen() ?: "").joinToString(",") { esc(it) }).append('\n')
         }
         return sb.toString()
     }

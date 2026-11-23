@@ -242,6 +242,7 @@ class RutaActivity : AppCompatActivity() {
             h.v.nombre.text = p.nombre
             h.v.detalle.text = (if (p.ubicada) "" else "📍 SIN UBICAR: toca para ubicarlo · ") +
                 (if (esProspectos) "Visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") + " · " else "") +
+                (if (!esProspectos) Visitas.ultima(p)?.let { "🔁 ${it.resumen()} · " } ?: "" else "") +
                 listOf(p.direccion, p.telefono, p.nota).filter { it.isNotBlank() }.joinToString(" · ")
             h.v.detalle.visibility = if (h.v.detalle.text.isBlank()) View.GONE else View.VISIBLE
             h.v.root.alpha = if (filtro != null && filtro !in p.etiquetas) 0.25f
@@ -299,8 +300,32 @@ class RutaActivity : AppCompatActivity() {
     }
 
     private fun marcar(p: Parada, e: Estado) {
-        p.estado = if (p.estado == e) Estado.PENDIENTE else e   // tocar otra vez lo desmarca
-        p.marcadaEn = if (p.estado == Estado.PENDIENTE) 0 else System.currentTimeMillis()
+        if (p.estado == e) {   // tocar otra vez lo desmarca (y quita el registro de hoy)
+            val hoy = java.text.SimpleDateFormat("yyyyMMdd", Locale.US)
+            val ult = p.historial.lastOrNull()
+            if (ult != null && hoy.format(java.util.Date(ult.fecha)) == hoy.format(java.util.Date()) &&
+                ult.resultado == e.name) p.historial.removeAt(p.historial.size - 1)
+            p.estado = Estado.PENDIENTE; p.marcadaEn = 0
+            Almacen.guardar(this); pintar(); return
+        }
+        if (e == Estado.VISITADA) {
+            Visitas.dialogo(this, p) { v -> v?.let { p.historial.add(it) }; aplicarMarca(p, e) }
+            return
+        }
+        p.historial.add(Visita(resultado = "NO_VISITADA"))
+        aplicarMarca(p, e)
+        Snackbar.make(b.root, "✕ ${p.nombre} sin visita", Snackbar.LENGTH_LONG).setAction("Agregar motivo") {
+            val et = EditText(this).apply { hint = "Cerrado, no estaba el encargado…"; setPadding(48, 32, 48, 32) }
+            AlertDialog.Builder(this).setTitle("Motivo").setView(et).setPositiveButton("Guardar") { _, _ ->
+                val i = p.historial.size - 1
+                if (i >= 0) p.historial[i] = p.historial[i].copy(comentario = et.text.toString().trim())
+                Almacen.guardar(this); pintar()
+            }.setNegativeButton("Cancelar", null).show()
+        }.show()
+    }
+
+    private fun aplicarMarca(p: Parada, e: Estado) {
+        p.estado = e; p.marcadaEn = System.currentTimeMillis()
         Almacen.guardar(this); pintar()
         if (ruta.pendientes == 0 && ruta.paradas.isNotEmpty())
             Snackbar.make(b.root, "¡Ruta terminada! ✓ ${ruta.visitadas} visitados, ✕ ${ruta.noVisitadas} sin visita", Snackbar.LENGTH_LONG).show()
@@ -525,13 +550,14 @@ class RutaActivity : AppCompatActivity() {
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
         val base = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar",
-            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada", "🏷 Etiquetas")
+            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada", "🏷 Etiquetas", "📋 Historial de visitas")
         val ops = if (esProspectos) base + "✅ Ya es cliente → pasar a una ruta" else base + "★ Regresar a prospecto"
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
                 5 -> if (Fotos.tiene(this, p.id)) verFoto(p) else pedirFoto(p)
                 6 -> Etiquetas.elegir(this, p) { Almacen.guardar(this); pintar() }
-                7 -> if (esProspectos) elegirRutaPara(p) else {
+                7 -> Visitas.historial(this, p)
+                8 -> if (esProspectos) elegirRutaPara(p) else {
                     ruta.paradas.remove(p); p.estado = Estado.PENDIENTE; Almacen.prospectos(this).paradas.add(p)
                     Almacen.guardar(this); pintar()
                 }
