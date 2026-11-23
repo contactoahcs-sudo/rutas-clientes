@@ -117,15 +117,20 @@ object Almacen {
 
     // ---------- Compartir rutas entre teléfonos con Mis Rutas ----------
     /** Archivo que se manda por WhatsApp/Drive; Mis Rutas lo reconoce por "app":"MisRutas". */
-    fun paquete(r: Ruta): String = JSONObject().put("app", "MisRutas").put("formato", 1)
-        .put("rutas", JSONArray().put(r.toJson())).toString(2)
+    fun paquete(ctx: Context, r: Ruta): String {
+        val fotos = JSONObject()
+        r.paradas.forEach { p -> Fotos.aTexto(ctx, p.id)?.let { fotos.put(p.id, it) } }
+        return JSONObject().put("app", "MisRutas").put("formato", 2)
+            .put("rutas", JSONArray().put(r.toJson())).put("fotos", fotos).toString()
+    }
 
-    /** Lee un paquete compartido o un respaldo. Lanza error si no es de Mis Rutas. */
-    fun leerPaquete(texto: String): List<Ruta> {
+    /** Lee un paquete compartido o un respaldo (y guarda sus fotos). Lanza error si no es de Mis Rutas. */
+    fun leerPaquete(ctx: Context, texto: String): List<Ruta> {
         val t = texto.trim().removePrefix("\uFEFF")
         val arr = if (t.startsWith("[")) JSONArray(t) else {
             val o = JSONObject(t)
             require(o.optString("app") == "MisRutas") { "No es un archivo de Mis Rutas" }
+            o.optJSONObject("fotos")?.let { f -> f.keys().forEach { id -> Fotos.desdeTexto(ctx, id, f.getString(id)) } }
             o.getJSONArray("rutas")
         }
         return (0 until arr.length()).map { Ruta.fromJson(arr.getJSONObject(it)) }
@@ -151,7 +156,7 @@ object Almacen {
     }
 
     fun restaurar(ctx: Context, texto: String): Int {
-        val nuevas = leerPaquete(texto)
+        val nuevas = leerPaquete(ctx, texto)
         val lista = rutas(ctx)
         nuevas.forEach { n -> lista.removeAll { it.id == n.id }; lista.add(n) }
         guardar(ctx)

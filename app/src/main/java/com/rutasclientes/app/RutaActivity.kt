@@ -73,6 +73,15 @@ class RutaActivity : AppCompatActivity() {
     }
 
     private val importar = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { importarDe(it) } }
+    // ---- fotos de fachada ----
+    private var fotoPara: String? = null          // id del cliente/prospecto al que va la foto
+    private var fotoTemporal: Uri? = null
+    private val tomarFotoLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val u = fotoTemporal
+        if (ok && u != null) guardarFoto(u)
+    }
+    private val elegirFotoLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { u -> u?.let { guardarFoto(it) } }
+
     private val exportar = registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         uri ?: return@registerForActivityResult
         contentResolver.openOutputStream(uri)?.use { it.write(Archivos.csv(ruta).toByteArray()) }
@@ -120,6 +129,11 @@ class RutaActivity : AppCompatActivity() {
                     is Parada -> { mk.showInfoWindow(); opcionesProspecto(t); true }
                     else -> false
                 }
+            }
+            m.setInfoWindowAdapter(VentanaConFoto())
+            m.setOnInfoWindowClickListener { mk ->
+                val p = (mk.tag as? Parada) ?: (mk.tag as? Int)?.let { ruta.paradas.getOrNull(it) }
+                p?.let { if (Fotos.tiene(this, it.id)) verFoto(it) else pedirFoto(it) }
             }
             m.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(19.5438, -96.9102), 13f)) // Xalapa
             if (tienePermiso()) activarUbicacion()
@@ -218,6 +232,10 @@ class RutaActivity : AppCompatActivity() {
             h.v.numero.text = (i + 1).toString()
             h.v.numero.background.mutate().setTint(if (esProspectos) MORADO else color(p.estado))
             h.v.no.visibility = if (esProspectos) View.GONE else View.VISIBLE
+            val mini = Fotos.cargar(this@RutaActivity, p.id, 120)
+            h.v.foto.setImageBitmap(mini)
+            h.v.foto.visibility = if (mini != null) View.VISIBLE else View.GONE
+            h.v.foto.setOnClickListener { verFoto(p) }
             h.v.nombre.text = p.nombre
             h.v.detalle.text = (if (p.ubicada) "" else "📍 SIN UBICAR: toca para ubicarlo · ") +
                 (if (esProspectos) "Visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") + " · " else "") +
@@ -248,16 +266,20 @@ class RutaActivity : AppCompatActivity() {
 
     /** Opciones de un prospecto tocado en el mapa de una ruta. */
     private fun opcionesProspecto(p: Parada) {
-        AlertDialog.Builder(this).setTitle("★ ${p.nombre}")
-            .setMessage("Prospecto · visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") +
-                (if (p.nota.isNotBlank()) "\n${p.nota}" else ""))
-            .setPositiveButton("Pasé hoy") { _, _ -> paseHoy(p) }
-            .setNeutralButton("Ya es cliente") { _, _ ->
-                Almacen.hacerCliente(this, p, ruta); pintar()
-                Toast.makeText(this, "${p.nombre} ahora es cliente #${ruta.paradas.size} de esta ruta", Toast.LENGTH_LONG).show()
+        val tieneFoto = Fotos.tiene(this, p.id)
+        val ops = arrayOf("✓ Pasé hoy (visitas: ${p.visitas})", "✅ Ya es cliente de esta ruta", "➤ Ir",
+            if (tieneFoto) "🖼 Ver foto de la fachada" else "📷 Tomar foto de la fachada")
+        AlertDialog.Builder(this).setTitle("★ ${p.nombre}").setItems(ops) { _, w ->
+            when (w) {
+                0 -> paseHoy(p)
+                1 -> {
+                    Almacen.hacerCliente(this, p, ruta); pintar()
+                    Toast.makeText(this, "${p.nombre} ahora es cliente #${ruta.paradas.size} de esta ruta", Toast.LENGTH_LONG).show()
+                }
+                2 -> navegar(p)
+                3 -> if (tieneFoto) verFoto(p) else pedirFoto(p)
             }
-            .setNegativeButton("Ir ➤") { _, _ -> navegar(p) }
-            .show()
+        }.show()
     }
 
     /** Desde la lista de prospectos: elegir a qué ruta pasa como cliente. */
@@ -296,6 +318,76 @@ class RutaActivity : AppCompatActivity() {
         }
     }
     private var moverConNumero: (RecyclerView.ViewHolder) -> Unit = {}
+
+    // ---------------- fotos de fachada ----------------
+    private fun buscarParada(id: String) =
+        ruta.paradas.firstOrNull { it.id == id } ?: Almacen.prospectos(this).paradas.firstOrNull { it.id == id }
+
+    private fun pedirFoto(p: Parada) {
+        fotoPara = p.id
+        AlertDialog.Builder(this).setTitle("📷 Fachada de ${p.nombre}")
+            .setItems(arrayOf("Tomar foto con la cámara", "Elegir de la galería")) { _, w ->
+                if (w == 0) {
+                    val dir = java.io.File(cacheDir, "camara").apply { mkdirs() }
+                    val f = java.io.File(dir, "foto-${System.currentTimeMillis()}.jpg")
+                    fotoTemporal = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+                    runCatching { tomarFotoLauncher.launch(fotoTemporal) }
+                        .onFailure { Toast.makeText(this, "No encontré la cámara", Toast.LENGTH_SHORT).show() }
+                } else elegirFotoLauncher.launch("image/*")
+            }.show()
+    }
+
+    private fun guardarFoto(u: Uri) {
+        val id = fotoPara ?: return
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) { Fotos.guardarDesde(this@RutaActivity, u, id) }
+            if (ok) {
+                pintar()
+                Toast.makeText(this@RutaActivity, "📷 Foto guardada" + (buscarParada(id)?.let { " para ${it.nombre}" } ?: ""), Toast.LENGTH_SHORT).show()
+            } else Toast.makeText(this@RutaActivity, "No se pudo guardar la foto", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Foto grande de la fachada con opciones. */
+    private fun verFoto(p: Parada) {
+        val bmp = Fotos.cargar(this, p.id, 1080) ?: return pedirFoto(p)
+        val img = android.widget.ImageView(this).apply {
+            setImageBitmap(bmp); adjustViewBounds = true; scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        }
+        AlertDialog.Builder(this).setTitle(p.nombre).setView(img)
+            .setPositiveButton("Cerrar", null)
+            .setNeutralButton("Cambiar foto") { _, _ -> pedirFoto(p) }
+            .setNegativeButton("Quitar") { _, _ -> Fotos.borrar(this, p.id); pintar() }
+            .show()
+    }
+
+    /** Ventanita del mapa: nombre, datos y la foto de la fachada si la tiene. */
+    private inner class VentanaConFoto : GoogleMap.InfoWindowAdapter {
+        override fun getInfoWindow(mk: com.google.android.gms.maps.model.Marker): View? = null
+        override fun getInfoContents(mk: com.google.android.gms.maps.model.Marker): View {
+            val p = (mk.tag as? Parada) ?: (mk.tag as? Int)?.let { ruta.paradas.getOrNull(it) }
+            val d = resources.displayMetrics.density
+            return android.widget.LinearLayout(this@RutaActivity).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                val foto = p?.let { Fotos.cargar(this@RutaActivity, it.id, 400) }
+                if (foto != null) addView(android.widget.ImageView(this@RutaActivity).apply {
+                    setImageBitmap(foto); scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    layoutParams = android.widget.LinearLayout.LayoutParams((220 * d).toInt(), (140 * d).toInt())
+                })
+                addView(android.widget.TextView(this@RutaActivity).apply {
+                    text = mk.title; setTextColor(Color.BLACK); setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding(0, (4 * d).toInt(), 0, 0)
+                })
+                mk.snippet?.takeIf { it.isNotBlank() }?.let { s ->
+                    addView(android.widget.TextView(this@RutaActivity).apply { text = s; setTextColor(Color.DKGRAY); maxWidth = (220 * d).toInt() })
+                }
+                addView(android.widget.TextView(this@RutaActivity).apply {
+                    text = if (foto != null) "Toca para ver la foto grande" else "📷 Toca para agregar foto de la fachada"
+                    setTextColor(Color.parseColor("#F28C28")); textSize = 12f
+                })
+            }
+        }
+    }
 
     private fun preguntarUbicacion(p: Parada) {
         AlertDialog.Builder(this).setTitle("Ubicar: ${p.nombre}")
@@ -415,19 +507,22 @@ class RutaActivity : AppCompatActivity() {
                 if (esNueva) destino.paradas.add(p)
                 Almacen.guardar(this); pintar()
                 if (esNueva && destino === ruta) b.lista.smoothScrollToPosition(ruta.paradas.size - 1)
-                if (esNueva && comoProspecto && !esProspectos)
-                    Toast.makeText(this, "★ ${p.nombre} guardado como prospecto (morado en el mapa)", Toast.LENGTH_LONG).show()
+                if (esNueva) Snackbar.make(b.root,
+                    if (comoProspecto && !esProspectos) "★ ${p.nombre} guardado como prospecto" else "${p.nombre} guardado",
+                    Snackbar.LENGTH_LONG).setAction("📷 Foto fachada") { pedirFoto(p) }.show()
             }
             .setNegativeButton("Cancelar", null).show()
     }
 
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
-        val base = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar")
+        val base = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar",
+            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada")
         val ops = if (esProspectos) base + "✅ Ya es cliente → pasar a una ruta" else base + "★ Regresar a prospecto"
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
-                5 -> if (esProspectos) elegirRutaPara(p) else {
+                5 -> if (Fotos.tiene(this, p.id)) verFoto(p) else pedirFoto(p)
+                6 -> if (esProspectos) elegirRutaPara(p) else {
                     ruta.paradas.remove(p); p.estado = Estado.PENDIENTE; Almacen.prospectos(this).paradas.add(p)
                     Almacen.guardar(this); pintar()
                 }
@@ -437,7 +532,7 @@ class RutaActivity : AppCompatActivity() {
                 3 -> if (p.telefono.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${p.telefono}")))
                      else Toast.makeText(this, "Este cliente no tiene teléfono", Toast.LENGTH_SHORT).show()
                 4 -> AlertDialog.Builder(this).setMessage("¿Eliminar ${p.nombre}?")
-                    .setPositiveButton("Eliminar") { _, _ -> ruta.paradas.remove(p); Almacen.guardar(this); pintar() }
+                    .setPositiveButton("Eliminar") { _, _ -> ruta.paradas.remove(p); Fotos.borrar(this, p.id); Almacen.guardar(this); pintar() }
                     .setNegativeButton("Cancelar", null).show()
             }
         }.show()
@@ -488,7 +583,7 @@ class RutaActivity : AppCompatActivity() {
         val dir = java.io.File(cacheDir, "compartir").apply { mkdirs() }
         val nombre = (if (esProspectos) "prospectos" else "ruta-${ruta.nombre}-${Ruta.DIAS[ruta.dia]}")
             .replace(Regex("[^\\w\\-]+"), "_") + ".misrutas.json"
-        val f = java.io.File(dir, nombre).apply { writeText(Almacen.paquete(ruta)) }
+        val f = java.io.File(dir, nombre).apply { writeText(Almacen.paquete(this, ruta)) }
         val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
         val texto = "Ruta ${b.toolbar.title} (${ruta.paradas.size} clientes). Ábrela con la app Mis Rutas."
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {

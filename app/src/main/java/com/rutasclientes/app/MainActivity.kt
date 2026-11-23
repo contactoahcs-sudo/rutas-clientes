@@ -81,7 +81,7 @@ class MainActivity : AppCompatActivity() {
         } ?: return
         i.action = null   // no volver a importarlo al girar la pantalla
         val rutas = runCatching {
-            Almacen.leerPaquete(contentResolver.openInputStream(uri)!!.bufferedReader().readText())
+            Almacen.leerPaquete(this, contentResolver.openInputStream(uri)!!.bufferedReader().readText())
         }.getOrElse {
             Toast.makeText(this, "Ese archivo no es una ruta de Mis Rutas", Toast.LENGTH_LONG).show(); return
         }

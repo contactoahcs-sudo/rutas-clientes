@@ -13,4 +13,8 @@
         <item name="android:textSize">22sp</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
     </style>
+    <style name="FotoRedonda">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">8dp</item>
+    </style>
 </resources>

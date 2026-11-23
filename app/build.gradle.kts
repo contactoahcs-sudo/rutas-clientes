@@ -17,8 +17,8 @@ android {
         applicationId = "com.rutasclientes.app"
         minSdk = 23
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
         manifestPlaceholders["MAPS_API_KEY"] = mapsKey
     }
 
@@ -63,4 +63,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.gms:play-services-maps:19.0.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 }
