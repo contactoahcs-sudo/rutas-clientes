@@ -34,8 +34,13 @@ class MainActivity : AppCompatActivity() {
 
     private val guardarRespaldo = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri ?: return@registerForActivityResult
-        contentResolver.openOutputStream(uri)?.use { it.write(Almacen.respaldo(this).toByteArray()) }
-        Toast.makeText(this, "Respaldo guardado", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Guardando respaldo con fotos…", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { contentResolver.openOutputStream(uri)?.use { it.write(Almacen.respaldo(this@MainActivity).toByteArray()) } }.isSuccess
+            }
+            Toast.makeText(this@MainActivity, if (ok) "Respaldo guardado (rutas, prospectos y fotos)" else "No se pudo guardar el respaldo", Toast.LENGTH_LONG).show()
+        }
     }
     private val abrirRespaldo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@registerForActivityResult

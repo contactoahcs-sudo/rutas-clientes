@@ -113,7 +113,14 @@ object Almacen {
     }
 
     /** Respaldo completo (todas las rutas) como texto JSON. */
-    fun respaldo(ctx: Context): String = JSONArray().apply { rutas(ctx).forEach { put(it.toJson()) } }.toString(2)
+    /** Respaldo completo: todas las rutas, prospectos y fotos de fachada en un solo archivo. */
+    fun respaldo(ctx: Context): String {
+        val fotos = JSONObject()
+        rutas(ctx).flatMap { it.paradas }.forEach { p -> Fotos.aTexto(ctx, p.id)?.let { fotos.put(p.id, it) } }
+        return JSONObject().put("app", "MisRutas").put("formato", 2).put("respaldo", true)
+            .put("rutas", JSONArray().apply { rutas(ctx).forEach { put(it.toJson()) } })
+            .put("fotos", fotos).toString()
+    }
 
     // ---------- Compartir rutas entre teléfonos con Mis Rutas ----------
     /** Archivo que se manda por WhatsApp/Drive; Mis Rutas lo reconoce por "app":"MisRutas". */
