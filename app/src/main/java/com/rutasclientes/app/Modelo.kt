@@ -19,6 +19,7 @@ data class Parada(
     var estado: Estado = Estado.PENDIENTE,
     var marcadaEn: Long = 0L,
     var visitas: Int = 0,               // prospectos: cuántas veces se le ha visitado
+    val etiquetas: MutableList<String> = mutableListOf(),   // ids de Etiqueta
 ) {
     /** false = cliente importado sin coordenadas: se ubica al llegar ("Ubicar aquí"). */
     val ubicada get() = !lat.isNaN() && !lng.isNaN()
@@ -28,6 +29,7 @@ data class Parada(
         .apply { if (ubicada) put("lat", lat).put("lng", lng) }
         .put("direccion", direccion).put("telefono", telefono).put("nota", nota)
         .put("estado", estado.name).put("marcadaEn", marcadaEn).put("visitas", visitas)
+        .put("etiquetas", JSONArray(etiquetas))
 
     companion object {
         fun fromJson(o: JSONObject) = Parada(
@@ -39,6 +41,7 @@ data class Parada(
             estado = runCatching { Estado.valueOf(o.optString("estado")) }.getOrDefault(Estado.PENDIENTE),
             marcadaEn = o.optLong("marcadaEn"),
             visitas = o.optInt("visitas"),
+            etiquetas = o.optJSONArray("etiquetas")?.let { a -> (0 until a.length()).map { a.getString(it) }.toMutableList() } ?: mutableListOf(),
         )
     }
 }
@@ -119,7 +122,7 @@ object Almacen {
         rutas(ctx).flatMap { it.paradas }.forEach { p -> Fotos.aTexto(ctx, p.id)?.let { fotos.put(p.id, it) } }
         return JSONObject().put("app", "MisRutas").put("formato", 2).put("respaldo", true)
             .put("rutas", JSONArray().apply { rutas(ctx).forEach { put(it.toJson()) } })
-            .put("fotos", fotos).toString()
+            .put("fotos", fotos).put("etiquetas", Etiquetas.aJson(ctx)).toString()
     }
 
     // ---------- Compartir rutas entre teléfonos con Mis Rutas ----------
@@ -128,7 +131,8 @@ object Almacen {
         val fotos = JSONObject()
         r.paradas.forEach { p -> Fotos.aTexto(ctx, p.id)?.let { fotos.put(p.id, it) } }
         return JSONObject().put("app", "MisRutas").put("formato", 2)
-            .put("rutas", JSONArray().put(r.toJson())).put("fotos", fotos).toString()
+            .put("rutas", JSONArray().put(r.toJson())).put("fotos", fotos)
+            .put("etiquetas", Etiquetas.aJson(ctx)).toString()
     }
 
     /** Lee un paquete compartido o un respaldo (y guarda sus fotos). Lanza error si no es de Mis Rutas. */
@@ -137,6 +141,7 @@ object Almacen {
         val arr = if (t.startsWith("[")) JSONArray(t) else {
             val o = JSONObject(t)
             require(o.optString("app") == "MisRutas") { "No es un archivo de Mis Rutas" }
+            Etiquetas.mezclar(ctx, o.optJSONArray("etiquetas"))
             o.optJSONObject("fotos")?.let { f -> f.keys().forEach { id -> Fotos.desdeTexto(ctx, id, f.getString(id)) } }
             o.getJSONArray("rutas")
         }

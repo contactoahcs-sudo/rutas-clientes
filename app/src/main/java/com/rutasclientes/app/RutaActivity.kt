@@ -55,6 +55,7 @@ class RutaActivity : AppCompatActivity() {
     private var miPos: LatLng? = null
     private var esperandoToque = false
     private var ubicando: Parada? = null
+    private var filtro: String? = null      // id de etiqueta resaltada (las demás se ven tenues)
     private val esProspectos get() = ruta.id == Almacen.PROSPECTOS
     private val MORADO = Color.parseColor("#8E24AA")   // cliente que se está ubicando tocando el mapa
     private var primerEncuadre = true
@@ -191,7 +192,8 @@ class RutaActivity : AppCompatActivity() {
         if (!esProspectos) m.addPolyline(PolylineOptions().addAll(puntos).color(Color.argb(150, 242, 140, 40)).width(6f))
         ruta.paradas.forEachIndexed { i, p ->
             if (p.ubicada) m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("${i + 1}. ${p.nombre}")
-                .snippet(p.direccion.ifBlank { p.nota }).icon(icono(i + 1, p.estado, esProspectos)))?.tag = i
+                .snippet(p.direccion.ifBlank { p.nota }).icon(icono(i + 1, p.estado, esProspectos))
+                .alpha(if (filtro != null && filtro !in p.etiquetas) 0.25f else 1f))?.tag = i
         }
         if (primerEncuadre) {
             primerEncuadre = false
@@ -232,6 +234,7 @@ class RutaActivity : AppCompatActivity() {
             h.v.numero.text = (i + 1).toString()
             h.v.numero.background.mutate().setTint(if (esProspectos) MORADO else color(p.estado))
             h.v.no.visibility = if (esProspectos) View.GONE else View.VISIBLE
+            Etiquetas.pintarEn(this@RutaActivity, h.v.etiquetas, p)
             val mini = Fotos.cargar(this@RutaActivity, p.id, 120)
             h.v.foto.setImageBitmap(mini)
             h.v.foto.visibility = if (mini != null) View.VISIBLE else View.GONE
@@ -241,7 +244,9 @@ class RutaActivity : AppCompatActivity() {
                 (if (esProspectos) "Visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") + " · " else "") +
                 listOf(p.direccion, p.telefono, p.nota).filter { it.isNotBlank() }.joinToString(" · ")
             h.v.detalle.visibility = if (h.v.detalle.text.isBlank()) View.GONE else View.VISIBLE
-            h.v.root.alpha = if (p.estado == Estado.PENDIENTE || esProspectos) 1f else 0.6f
+            h.v.root.alpha = if (filtro != null && filtro !in p.etiquetas) 0.25f
+                else if (p.estado == Estado.PENDIENTE || esProspectos) 1f else 0.6f
+            h.v.etiquetas.setOnClickListener { Etiquetas.elegir(this@RutaActivity, p) { Almacen.guardar(this@RutaActivity); pintar() } }
             h.v.si.setOnClickListener { if (esProspectos) paseHoy(p) else marcar(p, Estado.VISITADA) }
             h.v.no.setOnClickListener { marcar(p, Estado.NO_VISITADA) }
             h.v.ir.setOnClickListener { navegar(p) }
@@ -378,6 +383,9 @@ class RutaActivity : AppCompatActivity() {
                     text = mk.title; setTextColor(Color.BLACK); setTypeface(typeface, android.graphics.Typeface.BOLD)
                     setPadding(0, (4 * d).toInt(), 0, 0)
                 })
+                p?.let { Etiquetas.de(this@RutaActivity, it) }?.takeIf { it.isNotEmpty() }?.let { es ->
+                    addView(android.widget.LinearLayout(this@RutaActivity).apply { es.forEach { e -> addView(Etiquetas.chip(this@RutaActivity, e)) } })
+                }
                 mk.snippet?.takeIf { it.isNotBlank() }?.let { s ->
                     addView(android.widget.TextView(this@RutaActivity).apply { text = s; setTextColor(Color.DKGRAY); maxWidth = (220 * d).toInt() })
                 }
@@ -517,12 +525,13 @@ class RutaActivity : AppCompatActivity() {
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
         val base = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar",
-            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada")
+            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada", "🏷 Etiquetas")
         val ops = if (esProspectos) base + "✅ Ya es cliente → pasar a una ruta" else base + "★ Regresar a prospecto"
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
                 5 -> if (Fotos.tiene(this, p.id)) verFoto(p) else pedirFoto(p)
-                6 -> if (esProspectos) elegirRutaPara(p) else {
+                6 -> Etiquetas.elegir(this, p) { Almacen.guardar(this); pintar() }
+                7 -> if (esProspectos) elegirRutaPara(p) else {
                     ruta.paradas.remove(p); p.estado = Estado.PENDIENTE; Almacen.prospectos(this).paradas.add(p)
                     Almacen.guardar(this); pintar()
                 }
@@ -559,6 +568,15 @@ class RutaActivity : AppCompatActivity() {
                     ruta.paradas.forEach { it.estado = Estado.PENDIENTE; it.marcadaEn = 0 }; Almacen.guardar(this); pintar()
                 }.setNegativeButton("Cancelar", null).show()
             R.id.compartir -> compartir()
+            R.id.filtrar -> {
+                val es = Etiquetas.todas(this)
+                val nombres = (listOf("Todas (sin resaltar)") + es.map { "● ${it.texto} (${ruta.paradas.count { p -> it.id in p.etiquetas }})" }).toTypedArray()
+                AlertDialog.Builder(this).setTitle("Resaltar clientes con…").setItems(nombres) { _, w ->
+                    filtro = if (w == 0) null else es[w - 1].id
+                    b.toolbar.subtitle = filtro?.let { id -> "🏷 " + es.first { it.id == id }.texto }
+                    pintar()
+                }.show()
+            }
             R.id.importar -> importar.launch(arrayOf("text/*", "application/*", "*/*"))
             R.id.exportar -> exportar.launch("ruta-${ruta.nombre}-${Ruta.DIAS[ruta.dia]}.csv".replace(Regex("[^\\w.\\-]+"), "_"))
             R.id.renombrar -> {

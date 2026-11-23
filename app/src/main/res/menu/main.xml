@@ -1,5 +1,6 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@+id/respaldo" android:title="Guardar respaldo de todo" />
     <item android:id="@+id/restaurar" android:title="Restaurar respaldo" />
+    <item android:id="@+id/etiquetas" android:title="🏷 Mis etiquetas (crear / editar)" />
     <item android:id="@+id/actualizar" android:title="Buscar actualización" />
 </menu>

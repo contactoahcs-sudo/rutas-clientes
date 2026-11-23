@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.respaldo -> guardarRespaldo.launch("mis-rutas-" + SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) + ".json")
                 R.id.restaurar -> abrirRespaldo.launch(arrayOf("application/json", "text/*", "*/*"))
                 R.id.actualizar -> buscarActualizacion(true)
+                R.id.etiquetas -> Etiquetas.administrar(this)
             }
             true
         }
