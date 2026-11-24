@@ -21,6 +21,32 @@
             android:layout_gravity="top" android:background="#CC000000" android:padding="10dp"
             android:gravity="center" android:textColor="#FFFFFF" android:visibility="gone"
             android:text="Toca el mapa donde está el cliente (o mantén presionado en cualquier momento)" />
+
+        <!-- Modo "mover el punto": mira fija en el centro, se arrastra el mapa debajo -->
+        <TextView android:id="@+id/mira"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="center" android:layout_marginBottom="22dp"
+            android:text="📍" android:textSize="40sp" android:visibility="gone" />
+        <LinearLayout android:id="@+id/barraMover"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_gravity="bottom" android:background="#E6000000"
+            android:orientation="vertical" android:padding="10dp" android:visibility="gone">
+            <TextView android:id="@+id/textoMover"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:gravity="center" android:textColor="#FFFFFF" android:textSize="14sp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" android:orientation="horizontal">
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/cancelarMover"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:layout_marginEnd="8dp" android:text="Cancelar" android:textColor="#FFFFFF" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/guardarMover"
+                    android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1.4"
+                    android:text="✓ Guardar aquí" app:backgroundTint="#43A047" />
+            </LinearLayout>
+        </LinearLayout>
     </FrameLayout>
 
     <TextView android:id="@+id/conteo"

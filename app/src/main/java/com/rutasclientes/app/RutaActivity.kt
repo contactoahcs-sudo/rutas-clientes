@@ -55,6 +55,7 @@ class RutaActivity : AppCompatActivity() {
     private var miPos: LatLng? = null
     private var esperandoToque = false
     private var ubicando: Parada? = null
+    private var moviendo: Parada? = null    // negocio cuyo punto se está corrigiendo
     private var filtro: String? = null      // id de etiqueta resaltada (las demás se ven tenues)
     private val esProspectos get() = ruta.id == Almacen.PROSPECTOS
     private val MORADO = Color.parseColor("#8E24AA")   // cliente que se está ubicando tocando el mapa
@@ -106,6 +107,11 @@ class RutaActivity : AppCompatActivity() {
         arrastrarParaReordenar()
 
         b.agregar.setOnClickListener { elegirComoAgregar() }
+        b.cancelarMover.setOnClickListener { terminarMover() }
+        b.guardarMover.setOnClickListener {
+            val p = moviendo; val m = mapa
+            if (p != null && m != null) { val pos = m.cameraPosition.target; terminarMover(); fijarUbicacion(p, pos); ofrecerDireccion(p, pos) }
+        }
         b.optimizar.setOnClickListener { optimizar() }
         b.siguiente.setOnClickListener {
             val sig = ruta.paradas.firstOrNull { it.estado == Estado.PENDIENTE }
@@ -119,6 +125,7 @@ class RutaActivity : AppCompatActivity() {
             m.uiSettings.isMapToolbarEnabled = false
             m.setOnMapLongClickListener { p -> nuevaParadaEn(p) }
             m.setOnMapClickListener { p ->
+                if (moviendo != null) { m.animateCamera(CameraUpdateFactory.newLatLng(p)); return@setOnMapClickListener }
                 if (!esperandoToque) return@setOnMapClickListener
                 esperandoToque = false; b.ayudaMapa.visibility = View.GONE
                 val u = ubicando
@@ -182,7 +189,7 @@ class RutaActivity : AppCompatActivity() {
         val m = mapa ?: return
         m.clear()
         // Prospectos (tiendas por convencer) en morado en el mapa de cada ruta
-        if (!esProspectos) Almacen.prospectos(this).paradas.filter { it.ubicada }.forEach { p ->
+        if (!esProspectos) Almacen.prospectos(this).paradas.filter { it.ubicada && it !== moviendo }.forEach { p ->
             m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("★ ${p.nombre} (prospecto)")
                 .snippet("Visitas: ${p.visitas}" + if (p.nota.isNotBlank()) " · ${p.nota}" else "")
                 .icon(icono(0, Estado.PENDIENTE, prospecto = true)))?.tag = p
@@ -191,7 +198,7 @@ class RutaActivity : AppCompatActivity() {
         if (puntos.isEmpty()) return
         if (!esProspectos) m.addPolyline(PolylineOptions().addAll(puntos).color(Color.argb(150, 242, 140, 40)).width(6f))
         ruta.paradas.forEachIndexed { i, p ->
-            if (p.ubicada) m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("${i + 1}. ${p.nombre}")
+            if (p.ubicada && p !== moviendo) m.addMarker(MarkerOptions().position(LatLng(p.lat, p.lng)).title("${i + 1}. ${p.nombre}")
                 .snippet(p.direccion.ifBlank { p.nota }).icon(icono(i + 1, p.estado, esProspectos))
                 .alpha(if (filtro != null && filtro !in p.etiquetas) 0.25f else 1f))?.tag = i
         }
@@ -274,7 +281,8 @@ class RutaActivity : AppCompatActivity() {
     private fun opcionesProspecto(p: Parada) {
         val tieneFoto = Fotos.tiene(this, p.id)
         val ops = arrayOf("✓ Pasé hoy (visitas: ${p.visitas})", "✅ Ya es cliente de esta ruta", "➤ Ir",
-            if (tieneFoto) "🖼 Ver foto de la fachada" else "📷 Tomar foto de la fachada")
+            if (tieneFoto) "🖼 Ver foto de la fachada" else "📷 Tomar foto de la fachada",
+            "✏️ Editar nombre, dirección y datos", "📍 Mover el punto / corregir ubicación")
         AlertDialog.Builder(this).setTitle("★ ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
                 0 -> paseHoy(p)
@@ -284,6 +292,8 @@ class RutaActivity : AppCompatActivity() {
                 }
                 2 -> navegar(p)
                 3 -> if (tieneFoto) verFoto(p) else pedirFoto(p)
+                4 -> dialogoParada(p, false)
+                5 -> preguntarUbicacion(p)
             }
         }.show()
     }
@@ -423,13 +433,51 @@ class RutaActivity : AppCompatActivity() {
     }
 
     private fun preguntarUbicacion(p: Parada) {
-        AlertDialog.Builder(this).setTitle("Ubicar: ${p.nombre}")
-            .setItems(arrayOf("📍 Estoy aquí (usar mi ubicación)", "👆 Tocar el lugar en el mapa")) { _, w ->
-                if (w == 0) conUbicacionActual { pos ->
-                    if (pos == null) Toast.makeText(this, "Todavía no tengo tu ubicación. Revisa el GPS.", Toast.LENGTH_LONG).show()
-                    else fijarUbicacion(p, pos)
-                } else { ubicando = p; esperandoToque = true; b.ayudaMapa.visibility = View.VISIBLE }
+        AlertDialog.Builder(this).setTitle("📍 Ubicación de ${p.nombre}")
+            .setItems(arrayOf("✋ Mover el punto arrastrando el mapa (preciso)", "📍 Estoy aquí (usar mi GPS)", "👆 Tocar el lugar en el mapa")) { _, w ->
+                when (w) {
+                    0 -> empezarMover(p)
+                    1 -> conUbicacionActual { pos ->
+                        if (pos == null) Toast.makeText(this, "Todavía no tengo tu ubicación. Revisa el GPS.", Toast.LENGTH_LONG).show()
+                        else { fijarUbicacion(p, pos); ofrecerDireccion(p, pos) }
+                    }
+                    else -> { ubicando = p; esperandoToque = true; b.ayudaMapa.visibility = View.VISIBLE }
+                }
             }.setNegativeButton("Cancelar", null).show()
+    }
+
+    /** Modo mover: el pin queda fijo al centro y se arrastra el mapa debajo, cuantas veces haga falta. */
+    private fun empezarMover(p: Parada) {
+        val m = mapa ?: return
+        moviendo = p
+        val inicio = if (p.ubicada) LatLng(p.lat, p.lng) else (miPos ?: m.cameraPosition.target)
+        m.animateCamera(CameraUpdateFactory.newLatLngZoom(inicio, 18f))
+        b.textoMover.text = "Mueve el mapa con el dedo hasta que el 📍 quede sobre ${p.nombre}.\nPuedes acercar con dos dedos o tocar un lugar para saltar ahí."
+        b.mira.visibility = View.VISIBLE; b.barraMover.visibility = View.VISIBLE
+        b.optimizar.isEnabled = false; b.agregar.isEnabled = false
+        pintar()
+    }
+
+    private fun terminarMover() {
+        moviendo = null
+        b.mira.visibility = View.GONE; b.barraMover.visibility = View.GONE
+        b.optimizar.isEnabled = true; b.agregar.isEnabled = true
+        pintar()
+    }
+
+    /** Tras mover el punto, ofrece poner la dirección de ese lugar (no se cambia sin preguntar). */
+    @Suppress("DEPRECATION")
+    private fun ofrecerDireccion(p: Parada, pos: LatLng) {
+        lifecycleScope.launch {
+            val dir = withContext(Dispatchers.IO) {
+                runCatching { Geocoder(this@RutaActivity, Locale("es", "MX")).getFromLocation(pos.latitude, pos.longitude, 1)?.firstOrNull()?.getAddressLine(0) }.getOrNull()
+            }?.replace(Regex(",\\s*(Ver\\.|Veracruz).*$"), "") ?: return@launch
+            if (dir == p.direccion) return@launch
+            AlertDialog.Builder(this@RutaActivity).setTitle("¿Actualizar la dirección?")
+                .setMessage("Antes: ${p.direccion.ifBlank { "(sin dirección)" }}\n\nNueva: $dir")
+                .setPositiveButton("Actualizar") { _, _ -> p.direccion = dir; Almacen.guardar(this@RutaActivity); pintar() }
+                .setNegativeButton("Dejar como está", null).show()
+        }
     }
 
     private fun fijarUbicacion(p: Parada, pos: LatLng) {
@@ -549,7 +597,7 @@ class RutaActivity : AppCompatActivity() {
 
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
-        val base = arrayOf("Editar datos", "Ubicar aquí / en el mapa", "Cambiar número (orden)", "Llamar", "Eliminar",
+        val base = arrayOf("✏️ Editar nombre, dirección y datos", "📍 Mover el punto / corregir ubicación", "Cambiar número (orden)", "Llamar", "Eliminar",
             if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada", "🏷 Etiquetas", "📋 Historial de visitas")
         val ops = if (esProspectos) base + "✅ Ya es cliente → pasar a una ruta" else base + "★ Regresar a prospecto"
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
