@@ -101,6 +101,7 @@ class RutaActivity : AppCompatActivity() {
         b.toolbar.inflateMenu(R.menu.ruta)
         b.toolbar.setOnMenuItemClickListener { menu(it.itemId); true }
         titulo()
+        reiniciarMarcasDeOtroDia()
 
         b.lista.layoutManager = LinearLayoutManager(this)
         b.lista.adapter = adaptador
@@ -153,6 +154,18 @@ class RutaActivity : AppCompatActivity() {
 
     override fun onPause() { super.onPause(); ubic.removeLocationUpdates(callbackUbic) }
     override fun onResume() { super.onResume(); if (tienePermiso() && mapa != null) activarUbicacion() }
+
+    /** Un cliente de varios días marcado otro día aparece pendiente aquí (su historial se conserva). */
+    private fun reiniciarMarcasDeOtroDia() {
+        val hoy = java.text.SimpleDateFormat("yyyyMMdd", Locale.US).format(java.util.Date())
+        var cambio = false
+        ruta.paradas.filter { it.estado != Estado.PENDIENTE && Almacen.rutasDe(this, it).size > 1 }.forEach {
+            if (java.text.SimpleDateFormat("yyyyMMdd", Locale.US).format(java.util.Date(it.marcadaEn)) != hoy) {
+                it.estado = Estado.PENDIENTE; it.marcadaEn = 0; cambio = true
+            }
+        }
+        if (cambio) Almacen.guardar(this)
+    }
 
     private fun titulo() {
         if (esProspectos) { b.toolbar.title = "★ Prospectos por convencer"; return }
@@ -249,6 +262,8 @@ class RutaActivity : AppCompatActivity() {
             h.v.nombre.text = p.nombre
             h.v.detalle.text = (if (p.ubicada) "" else "📍 SIN UBICAR: toca para ubicarlo · ") +
                 (if (esProspectos) "Visitas: ${p.visitas}" + (if (p.marcadaEn > 0) " (última ${fecha(p.marcadaEn)})" else "") + " · " else "") +
+                (if (!esProspectos) Almacen.diasDe(this@RutaActivity, p).takeIf { it.size > 1 }
+                    ?.let { ds -> "📅 " + ds.joinToString("·") { Ruta.DIAS[it].take(3) } + " · " } ?: "" else "") +
                 (if (!esProspectos) Visitas.ultima(p)?.let { "🔁 ${it.resumen()} · " } ?: "" else "") +
                 listOf(p.direccion, p.telefono, p.nota).filter { it.isNotBlank() }.joinToString(" · ")
             h.v.detalle.visibility = if (h.v.detalle.text.isBlank()) View.GONE else View.VISIBLE
@@ -598,14 +613,15 @@ class RutaActivity : AppCompatActivity() {
     private fun opcionesParada(p: Parada) {
         val i = ruta.paradas.indexOf(p)
         val base = arrayOf("✏️ Editar nombre, dirección y datos", "📍 Mover el punto / corregir ubicación", "Cambiar número (orden)", "Llamar", "Eliminar",
-            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada", "🏷 Etiquetas", "📋 Historial de visitas")
+            if (Fotos.tiene(this, p.id)) "🖼 Foto de la fachada" else "📷 Tomar foto de la fachada", "🏷 Etiquetas", "📋 Historial de visitas", "📅 Días de visita (frecuencia)")
         val ops = if (esProspectos) base + "✅ Ya es cliente → pasar a una ruta" else base + "★ Regresar a prospecto"
         AlertDialog.Builder(this).setTitle("${i + 1}. ${p.nombre}").setItems(ops) { _, w ->
             when (w) {
                 5 -> if (Fotos.tiene(this, p.id)) verFoto(p) else pedirFoto(p)
                 6 -> Etiquetas.elegir(this, p) { Almacen.guardar(this); pintar() }
                 7 -> Visitas.historial(this, p)
-                8 -> if (esProspectos) elegirRutaPara(p) else {
+                8 -> diasDeVisita(p)
+                9 -> if (esProspectos) elegirRutaPara(p) else {
                     ruta.paradas.remove(p); p.estado = Estado.PENDIENTE; Almacen.prospectos(this).paradas.add(p)
                     Almacen.guardar(this); pintar()
                 }
@@ -615,10 +631,43 @@ class RutaActivity : AppCompatActivity() {
                 3 -> if (p.telefono.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${p.telefono}")))
                      else Toast.makeText(this, "Este cliente no tiene teléfono", Toast.LENGTH_SHORT).show()
                 4 -> AlertDialog.Builder(this).setMessage("¿Eliminar ${p.nombre}?")
-                    .setPositiveButton("Eliminar") { _, _ -> ruta.paradas.remove(p); Fotos.borrar(this, p.id); Almacen.guardar(this); pintar() }
+                    .setPositiveButton("Eliminar") { _, _ ->
+                        ruta.paradas.remove(p)
+                        if (Almacen.rutas(this).none { r -> r.paradas.any { it.id == p.id } }) Fotos.borrar(this, p.id)
+                        Almacen.guardar(this); pintar()
+                    }
                     .setNegativeButton("Cancelar", null).show()
             }
         }.show()
+    }
+
+    /** Frecuencia: en qué días se visita a este cliente. Aparece en la ruta de cada día elegido. */
+    private fun diasDeVisita(p: Parada) {
+        if (esProspectos) { Toast.makeText(this, "Primero pásalo a cliente", Toast.LENGTH_SHORT).show(); return }
+        val nombres = Ruta.DIAS.drop(1).toTypedArray()          // Lunes..Domingo (índice 0 = lunes)
+        val actuales = Almacen.diasDe(this, p).toSet()
+        val marcados = BooleanArray(7) { (it + 1) in actuales || (it + 1) == ruta.dia }
+        AlertDialog.Builder(this).setTitle("📅 ¿Qué días visitas a ${p.nombre}?")
+            .setMultiChoiceItems(nombres, marcados) { d, i, on ->
+                if ((i + 1) == ruta.dia && !on) {    // el día de esta ruta no se quita aquí
+                    marcados[i] = true; (d as AlertDialog).listView.setItemChecked(i, true)
+                    Toast.makeText(this, "Está en esta ruta (${Ruta.DIAS[ruta.dia]}). Para quitarlo de aquí usa Eliminar.", Toast.LENGTH_LONG).show()
+                } else marcados[i] = on
+            }
+            .setPositiveButton("Guardar") { _, _ ->
+                val agregados = mutableListOf<String>()
+                for (i in 0 until 7) {
+                    val dia = i + 1
+                    if (dia == ruta.dia) continue
+                    if (marcados[i] && dia !in actuales) { val r = Almacen.agregarEnDia(this, p, dia); agregados.add("${r.nombre} (#${r.paradas.size})") }
+                    if (!marcados[i] && dia in actuales) Almacen.quitarDeDia(this, p, dia)
+                }
+                Almacen.guardar(this); pintar()
+                val dias = Almacen.diasDe(this, p).joinToString(", ") { Ruta.DIAS[it] }
+                Toast.makeText(this, "${p.nombre}: se visita $dias" +
+                    if (agregados.isNotEmpty()) "\nAgregado al final de: ${agregados.joinToString()}" else "", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Cancelar", null).show()
     }
 
     private fun cambiarNumero(p: Parada) {

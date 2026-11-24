@@ -105,13 +105,47 @@ object Almacen {
             val arr = JSONArray(f.readText())
             (0 until arr.length()).map { Ruta.fromJson(arr.getJSONObject(it)) }.toMutableList()
         }.getOrElse { mutableListOf() } else mutableListOf()
+        unirRepetidos(lista)
         cache = lista
         return lista
     }
 
+    /**
+     * Un cliente que se visita varios días está en varias rutas con el mismo id.
+     * Aquí se hace que sea el MISMO objeto en todas (misma foto, etiquetas, historial, datos).
+     */
+    private fun unirRepetidos(lista: List<Ruta>) {
+        val vistos = HashMap<String, Parada>()
+        lista.forEach { r ->
+            for (i in r.paradas.indices) {
+                val p = r.paradas[i]
+                val ya = vistos[p.id]
+                if (ya == null) vistos[p.id] = p else r.paradas[i] = ya
+            }
+        }
+    }
+
+    /** Rutas (con día) en las que está este cliente. */
+    fun rutasDe(ctx: Context, p: Parada) = rutasDelDia(ctx).filter { r -> r.paradas.any { it === p || it.id == p.id } }
+
+    /** Días de la semana (1..7) en que se visita a este cliente. */
+    fun diasDe(ctx: Context, p: Parada) = rutasDe(ctx, p).map { it.dia }.filter { it > 0 }.distinct().sorted()
+
+    /** Agrega el cliente a la ruta de ese día (si no hay, la crea con el nombre del día). */
+    fun agregarEnDia(ctx: Context, p: Parada, dia: Int): Ruta {
+        val r = rutasDelDia(ctx).firstOrNull { it.dia == dia }
+            ?: Ruta(nombre = Ruta.DIAS[dia], dia = dia).also { rutas(ctx).add(it) }
+        if (r.paradas.none { it.id == p.id }) r.paradas.add(p)
+        return r
+    }
+
+    fun quitarDeDia(ctx: Context, p: Parada, dia: Int) =
+        rutasDelDia(ctx).filter { it.dia == dia }.forEach { r -> r.paradas.removeAll { it.id == p.id } }
+
     fun ruta(ctx: Context, id: String) = rutas(ctx).firstOrNull { it.id == id }
 
     fun guardar(ctx: Context) {
+        unirRepetidos(rutas(ctx))
         val arr = JSONArray().apply { rutas(ctx).forEach { put(it.toJson()) } }
         val tmp = File(ctx.filesDir, "$ARCHIVO.tmp")
         tmp.writeText(arr.toString())
